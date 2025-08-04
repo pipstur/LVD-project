@@ -1,6 +1,7 @@
+import argparse
 import os
 import shutil
-import argparse
+
 import kagglehub
 
 
@@ -9,7 +10,7 @@ def download_dataset(dataset_id: str) -> str:
     Downloads the dataset from KaggleHub and returns the cached path.
 
     Args:
-        dataset_id (str): The KaggleHub dataset identifier (e.g., "user/dataset-name").
+        dataset_id (str): The KaggleHub dataset identifier (e.g.,  "user/dataset-name").
 
     Returns:
         str: Path to the downloaded dataset in the kagglehub cache directory.
