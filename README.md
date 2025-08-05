@@ -10,7 +10,7 @@ pre-commit install
 # Getting the data
 Data setup script
 ```bash
-python data_setup.py \
+python src/dataset_preparation/data_setup.py \
 --dataset_id mennaahmed23/baby-cry-sense-dataset \
 --output_dir ./data/baby_cry
 ```
