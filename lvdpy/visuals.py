@@ -1,6 +1,11 @@
-# visualization functions for lvdpy package
-# Author: Danilo Ristic
-# Date created: 2025-08-05
+"""
+Visualization utilities for the lvdpy package.
+
+This module provides functions for visualizing audio dataset metadata.
+
+Author: Danilo Ristic
+Date created: 2025-08-05
+"""
 
 # Imports
 import matplotlib.pyplot as plt
