@@ -7,14 +7,17 @@ Author: Danilo Ristic
 Date created: 2025-08-05
 """
 
-# Imports
+# System imports
 import os
+import shutil
 from pathlib import Path
 
+# Other imports
 import librosa
 import numpy as np
 import pandas as pd
 import soundfile as sf
+from sklearn.model_selection import StratifiedKFold, train_test_split
 
 
 # Functions
@@ -76,11 +79,16 @@ def upscale_sample_rate(input_path, output_path):
     metadata_df = create_metadata(input_path)
     max_sr = metadata_df["sampling_rate"].max()
     for _, row in metadata_df.iterrows():
+        path = os.path.join(output_path, row["file_path"].parent.name, row["file_path"].name)
         if row["sampling_rate"] < max_sr:
             y, sr = librosa.load(row["file_path"], sr=row["sampling_rate"])
             y_resampled = librosa.resample(y, orig_sr=sr, target_sr=max_sr)
-            path = os.path.join(output_path, row["file_path"].name)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
             sf.write(path, y_resampled, max_sr)
+        else:
+            y, sr = librosa.load(row["file_path"], sr=None)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            sf.write(path, y, sr)
 
 
 def remove_underrepresented_categories(metadata_df, percent=0.5):
@@ -117,8 +125,10 @@ def add_random_noise(input_path, output_path, noise_level=0.01, seed=27):
         y, sr = librosa.load(row["file_path"], sr=None)
         noise = np.random.normal(0, noise_level, y.shape)
         y_noisy = y + noise
+        parentname = row["file_path"].parent.name
         filename = row["file_path"].name.replace(".wav", "_noise_" + str(noise_level) + ".wav")
-        path = os.path.join(output_path, filename)
+        path = os.path.join(output_path, parentname, filename)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         sf.write(path, y_noisy, sr)
 
 
@@ -141,11 +151,73 @@ def extract_cepstral_coefficients(metadata_df):
     return pd.DataFrame(coefficients, columns=[f"mfcc_{i + 1}" for i in range(13)])
 
 
-# def preprocess_data(data=None, import_data=False, directory="Baby Cry Dataset/"):
-#     # make make sense
-#     if import_data:
-#         data = create_metadata(directory)
-#     if not data:
-#         return data
-#     data = remove_underrepresented_categories(upscale_sample_rate(data))
-#     return data
+def split_and_organize_files(
+    input_dir,
+    output_dir,
+    test_size=0.2,
+    val_size=0.1,
+    n_splits=5,
+    random_state=42,
+    stratify_col="category",
+):
+    """
+    Split files into train, test, validation, and k-fold folders, and move/copy
+                                                    them to appropriate directories.
+
+    Args:
+        metadata_df (pandas.DataFrame): DataFrame with at least 'file_path' and 'category' columns.
+        output_dir (str): Path to the output directory where folders will be created.
+        test_size (float): Proportion of the dataset to include in the test split.
+        val_size (float): Proportion of the training set to include in the validation split.
+        n_splits (int): Number of folds for K-Fold cross-validation.
+        random_state (int): Random seed for reproducibility.
+        stratify_col (str): Column name to use for stratification.
+    """
+    # Split into train+val and test
+    metadata_df = create_metadata(input_dir)
+
+    trainval_df, test_df = train_test_split(
+        metadata_df,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=metadata_df[stratify_col] if stratify_col in metadata_df else None,
+    )
+
+    # Split train+val into train and val
+    if val_size > 0:
+        train_df, val_df = train_test_split(
+            trainval_df,
+            test_size=val_size,
+            random_state=random_state,
+            stratify=trainval_df[stratify_col] if stratify_col in trainval_df else None,
+        )
+    else:
+        train_df, val_df = trainval_df, pd.DataFrame()
+
+    # Helper to copy files
+    def copy_files(df, split_name):
+        for _, row in df.iterrows():
+            category = row["category"]
+            dest_dir = os.path.join(output_dir, split_name, category)
+            os.makedirs(dest_dir, exist_ok=True)
+            dest_path = os.path.join(dest_dir, row["file_path"].name)
+            shutil.copy2(row["file_path"], dest_path)
+
+    # Copy files to train, val, test folders
+    copy_files(train_df, "train")
+    if not val_df.empty:
+        copy_files(val_df, "val")
+    copy_files(test_df, "test")
+
+    # K-Fold split on train+val
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    X = trainval_df.index
+    y = trainval_df[stratify_col] if stratify_col in trainval_df else None
+    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y)):
+        # fold_dir = os.path.join(output_dir, f"kfold_{fold + 1}")
+        # Train fold
+        fold_train_df = trainval_df.iloc[train_idx]
+        copy_files(fold_train_df, os.path.join(f"kfold_{fold + 1}", "train"))
+        # Validation fold
+        fold_val_df = trainval_df.iloc[val_idx]
+        copy_files(fold_val_df, os.path.join(f"kfold_{fold + 1}", "val"))

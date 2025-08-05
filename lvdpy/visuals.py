@@ -7,7 +7,9 @@ Author: Danilo Ristic
 Date created: 2025-08-05
 """
 
-# Imports
+# System imports
+
+# Other imports
 import matplotlib.pyplot as plt
 
 
