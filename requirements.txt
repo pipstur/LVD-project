@@ -6,4 +6,6 @@ scikit-learn
 seaborn
 jupyter
 ipykernel
+librosa
+soundfile
 kagglehub==0.3.12
