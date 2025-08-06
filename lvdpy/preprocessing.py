@@ -20,13 +20,52 @@ import soundfile as sf
 from sklearn.model_selection import StratifiedKFold, train_test_split
 
 
-# Functions
+# Internal Functions
+def _oversample(path):
+    """
+    Oversample the minority class in the training set to balance
+                                    the dataset using noise augmentation.
+
+    Args:
+        path (str): Path to the directory containing category folders to be oversampled.
+    """
+    # List all category folders
+    categories = [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))]
+    category_counts = {}
+    for cat in categories:
+        cat_dir = os.path.join(path, cat)
+        wav_files = [f for f in os.listdir(cat_dir) if f.endswith(".wav")]
+        category_counts[cat] = len(wav_files)
+
+    if not category_counts:
+        raise ValueError("No categories found in the specified path.")
+
+    max_count = max(category_counts.values())
+
+    for cat in categories:
+        cat_dir = os.path.join(path, cat)
+        wav_files = [f for f in os.listdir(cat_dir) if f.endswith(".wav")]
+        n_to_add = max_count - len(wav_files)
+        if n_to_add <= 0:
+            continue
+        for i in range(n_to_add):
+            src_file = os.path.join(cat_dir, wav_files[i % len(wav_files)])
+            y, sr = librosa.load(src_file, sr=None)
+            noise = np.random.normal(0, 0.01, y.shape)
+            y_noisy = y + noise
+            base, ext = os.path.splitext(wav_files[i % len(wav_files)])
+            new_filename = f"{base}_noise_aug_{i + 1}{ext}"
+            new_path = os.path.join(cat_dir, new_filename)
+            sf.write(new_path, y_noisy, sr)
+
+
+# External Functions
 def create_metadata(input_path):
     """
     Generate a metadata DataFrame for all .wav files in the specified directory.
 
     Args:
-        directory (str): Path to the directory containing .wav files.
+        input_path (str): Path to the directory containing .wav files.
 
     Returns:
         pandas.DataFrame: DataFrame containing file path, filename,
@@ -73,8 +112,7 @@ def upscale_sample_rate(input_path, output_path):
                     highest sample rate found in the DataFrame.
 
     Args:
-        metadata_df (pandas.DataFrame):
-            DataFrame containing metadata with 'file_path' and 'sampling_rate' columns.
+        input_dir (str): Path to the input directory to create the dataframe.
     """
     metadata_df = create_metadata(input_path)
     max_sr = metadata_df["sampling_rate"].max()
@@ -109,18 +147,40 @@ def remove_underrepresented_categories(metadata_df, percent=0.5):
     return metadata_df[metadata_df["category"].isin(categories_to_keep)]
 
 
-def add_random_noise(input_path, output_path, noise_level=0.01, seed=27):
+def remove_files_by_duration(metadata_df, lower_threshold=0, upper_threshold=10):
+    """
+    Remove files from the metadata DataFrame that exceed a specified duration.
+
+    Args:
+        metadata_df (pandas.DataFrame):
+            DataFrame containing metadata with a 'duration' column.
+        lower_threshold (float): Lower duration threshold in seconds.
+        upper_threshold (float): Upper duration threshold in seconds.
+
+    Returns:
+        pandas.DataFrame: Updated metadata DataFrame after removing files
+                                                over the duration threshold.
+    """
+    mask = (metadata_df["duration"] >= lower_threshold) & (
+        metadata_df["duration"] <= upper_threshold
+    )
+    filtered_df = metadata_df[mask]
+    return filtered_df
+
+
+def add_random_noise(input_path, output_path, noise_level=0.01, seed=27, n_files=-1):
     """
     Add random noise to audio files in the metadata DataFrame.
 
     Args:
-        metadata_df (pandas.DataFrame):
-            DataFrame containing metadata with 'file_path' column.
+        input_dir (str): Path to the input directory to create the dataframe.
         noise_level (float): Standard deviation of the noise to be added.
         seed (int): Random seed for reproducibility.
     """
     np.random.seed(seed)
     metadata_df = create_metadata(input_path)
+    if n_files >= 0 and n_files <= metadata_df.size:
+        metadata_df = metadata_df.sample(n=n_files, random_state=27)
     for _, row in metadata_df.iterrows():
         y, sr = librosa.load(row["file_path"], sr=None)
         noise = np.random.normal(0, noise_level, y.shape)
@@ -159,22 +219,25 @@ def split_and_organize_files(
     n_splits=5,
     random_state=42,
     stratify_col="category",
+    oversample=False,
 ):
     """
     Split files into train, test, validation, and k-fold folders, and move/copy
                                                     them to appropriate directories.
 
     Args:
-        metadata_df (pandas.DataFrame): DataFrame with at least 'file_path' and 'category' columns.
+        input_dir (str): Path to the input directory to create the dataframe.
         output_dir (str): Path to the output directory where folders will be created.
         test_size (float): Proportion of the dataset to include in the test split.
         val_size (float): Proportion of the training set to include in the validation split.
         n_splits (int): Number of folds for K-Fold cross-validation.
         random_state (int): Random seed for reproducibility.
         stratify_col (str): Column name to use for stratification.
+        oversample (bool): Whether to oversample the minority class
+                                                in the train sets of stratified splits.
     """
     # Split into train+val and test
-    metadata_df = create_metadata(input_dir)
+    metadata_df = remove_underrepresented_categories(create_metadata(input_dir))
 
     trainval_df, test_df = train_test_split(
         metadata_df,
@@ -217,7 +280,13 @@ def split_and_organize_files(
         # fold_dir = os.path.join(output_dir, f"kfold_{fold + 1}")
         # Train fold
         fold_train_df = trainval_df.iloc[train_idx]
-        copy_files(fold_train_df, os.path.join(f"kfold_{fold + 1}", "train"))
+        fold_path_train = os.path.join(f"kfold_{fold + 1}", "train")
+        copy_files(fold_train_df, fold_path_train)
+        if oversample:
+            _oversample(os.path.join(output_dir, fold_path_train))
         # Validation fold
         fold_val_df = trainval_df.iloc[val_idx]
-        copy_files(fold_val_df, os.path.join(f"kfold_{fold + 1}", "val"))
+        fold_path_val = os.path.join(f"kfold_{fold + 1}", "val")
+        copy_files(fold_val_df, fold_path_val)
+    if oversample:
+        _oversample(os.path.join(output_dir, "train"))
