@@ -8,4 +8,5 @@ jupyter
 ipykernel
 librosa
 soundfile
+pyrootutils
 kagglehub==0.3.12
