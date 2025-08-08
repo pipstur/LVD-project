@@ -49,7 +49,7 @@ jobs:
 
       - name: Run Tests
         run: |
-          python -m unittest discover
+          python test/*.py
 
   docker-build:
     runs-on: ubuntu-latest
