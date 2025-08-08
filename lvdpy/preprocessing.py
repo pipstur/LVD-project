@@ -97,8 +97,6 @@ def upscale_sample_rate(metadata_df):
             # Optional: update the metadata
             metadata_df.at[idx, "sampling_rate"] = max_sr
 
-            print(f"[OK] Upsampled: {file_path} → {max_sr}Hz")
-
 
 def remove_underrepresented_categories(metadata_df, percent=0.5):
     """
@@ -265,7 +263,21 @@ def augmentation(
     noise_level=0.005,
     extra_noise_level=0.02,
 ):
+    """
+    Perform data augmentation on audio files in the specified directory.
 
+    This function processes each category directory, slicing audio files into overlapping
+    windows, adding noise, and balancing the number of samples per category by duplication
+    with additional noise. For the 'hungry' category, only noise is added without slicing.
+
+    Args:
+        path (str): Path to the directory containing category subfolders with .wav files.
+        target_duration (float): Duration (in seconds) of each audio window.
+        sample_rate (int): Sample rate for loading and saving audio.
+        overlap (float): Fractional overlap between windows (0 to 1).
+        noise_level (float): Standard deviation of noise added to each window.
+        extra_noise_level (float): Additional noise for duplicated samples.
+    """
     window_size = int(target_duration * sample_rate)
     hop_length = int(window_size * (1 - overlap))
     max_padding_allowed = int(3 * sample_rate)
@@ -345,6 +357,15 @@ def augmentation(
 
 
 def apply_augmentation(splits_path):
+    """
+    Apply augmentation to all split directories (train, test, val, kfold) in the given path.
+
+    This function iterates over split directories and applies the augmentation process
+    to each, including nested kfold splits.
+
+    Args:
+        splits_path (str): Path to the directory containing split folders.
+    """
     for split_dir in os.listdir(splits_path):
         split_path = os.path.join(splits_path, split_dir)
         if not os.path.isdir(split_path):
