@@ -49,8 +49,7 @@ jobs:
 
       - name: Run Tests
         run: |
-          python tests/test_preprocessing.py
-          python tests/test_visuals.py
+          python -m unittest discover
 
   docker-build:
     runs-on: ubuntu-latest
