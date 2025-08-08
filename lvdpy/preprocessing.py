@@ -14,12 +14,10 @@ from pathlib import Path
 
 # Other imports
 import librosa
-import shutil
 import numpy as np
 import pandas as pd
 import soundfile as sf
 from sklearn.model_selection import StratifiedKFold, train_test_split
-
 
 
 # Functions
@@ -100,6 +98,7 @@ def upscale_sample_rate(metadata_df):
             metadata_df.at[idx, "sampling_rate"] = max_sr
 
             print(f"[OK] Upsampled: {file_path} → {max_sr}Hz")
+
 
 def remove_underrepresented_categories(metadata_df, percent=0.5):
     """
@@ -182,6 +181,7 @@ def extract_cepstral_coefficients(metadata_df):
         coefficients.append(mfccs.mean(axis=1))
     return pd.DataFrame(coefficients, columns=[f"mfcc_{i + 1}" for i in range(13)])
 
+
 def split_and_organize_files(
     output_dir,
     metadata_df,
@@ -255,11 +255,16 @@ def split_and_organize_files(
         fold_val_df = trainval_df.iloc[val_idx]
         fold_path_val = os.path.join(f"kfold_{fold + 1}", "val")
         copy_files(fold_val_df, fold_path_val)
-   
 
 
-def augmentation(path, target_duration=5.0, sample_rate=44100, overlap=0.3,
-                 noise_level=0.005, extra_noise_level=0.02):
+def augmentation(
+    path,
+    target_duration=5.0,
+    sample_rate=44100,
+    overlap=0.3,
+    noise_level=0.005,
+    extra_noise_level=0.02,
+):
 
     window_size = int(target_duration * sample_rate)
     hop_length = int(window_size * (1 - overlap))
@@ -289,7 +294,7 @@ def augmentation(path, target_duration=5.0, sample_rate=44100, overlap=0.3,
                     y = np.pad(y, (0, window_size - len(y)))
                 elif len(y) > window_size:
                     start = (len(y) - window_size) // 2
-                    y = y[start:start + window_size]
+                    y = y[start : start + window_size]
 
                 y_noisy = y + np.random.normal(0, noise_level, size=y.shape)
 
@@ -330,7 +335,7 @@ def augmentation(path, target_duration=5.0, sample_rate=44100, overlap=0.3,
             i += 1
 
         for idx, sample in enumerate(new_samples):
-            new_name = f"{cat}_sample_{idx+1}.wav"
+            new_name = f"{cat}_sample_{idx + 1}.wav"
             new_path = os.path.join(cat_dir, new_name)
             sf.write(new_path, sample, sample_rate)
 
