@@ -65,7 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="data/baby_cry",
+        default="data/",
         help="Relative path where the dataset will be copied (default: data/baby_cry)",
     )
     return parser.parse_args()

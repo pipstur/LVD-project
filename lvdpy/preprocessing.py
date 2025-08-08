@@ -14,52 +14,15 @@ from pathlib import Path
 
 # Other imports
 import librosa
+import shutil
 import numpy as np
 import pandas as pd
 import soundfile as sf
 from sklearn.model_selection import StratifiedKFold, train_test_split
 
 
-# Internal Functions
-def _oversample(path):
-    """
-    Oversample the minority class in the training set to balance
-                                    the dataset using noise augmentation.
 
-    Args:
-        path (str): Path to the directory containing category folders to be oversampled.
-    """
-    # List all category folders
-    categories = [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))]
-    category_counts = {}
-    for cat in categories:
-        cat_dir = os.path.join(path, cat)
-        wav_files = [f for f in os.listdir(cat_dir) if f.endswith(".wav")]
-        category_counts[cat] = len(wav_files)
-
-    if not category_counts:
-        raise ValueError("No categories found in the specified path.")
-
-    max_count = max(category_counts.values())
-
-    for cat in categories:
-        cat_dir = os.path.join(path, cat)
-        wav_files = [f for f in os.listdir(cat_dir) if f.endswith(".wav")]
-        n_to_add = max_count - len(wav_files)
-        if n_to_add <= 0:
-            continue
-        for i in range(n_to_add):
-            src_file = os.path.join(cat_dir, wav_files[i % len(wav_files)])
-            y, sr = librosa.load(src_file, sr=None)
-            noise = np.random.normal(0, 0.01, y.shape)
-            y_noisy = y + noise
-            base, ext = os.path.splitext(wav_files[i % len(wav_files)])
-            new_filename = f"{base}_noise_aug_{i + 1}{ext}"
-            new_path = os.path.join(cat_dir, new_filename)
-            sf.write(new_path, y_noisy, sr)
-
-
-# External Functions
+# Functions
 def create_metadata(input_path):
     """
     Generate a metadata DataFrame for all .wav files in the specified directory.
@@ -106,28 +69,37 @@ def get_unique_sample_rates(metadata_df):
     return metadata_df["sampling_rate"].unique().tolist()
 
 
-def upscale_sample_rate(input_path, output_path):
+def upscale_sample_rate(metadata_df):
     """
-    Upscale all audio files in the metadata DataFrame to the
-                    highest sample rate found in the DataFrame.
+    Resample all audio files in metadata_df to the max sample rate,
+    overwriting the files in-place in the same folder structure under input_path.
 
     Args:
-        input_dir (str): Path to the input directory to create the dataframe.
+        metadata_df (pandas.DataFrame): Must have 'file_path' and 'sampling_rate' columns.
     """
-    metadata_df = create_metadata(input_path)
     max_sr = metadata_df["sampling_rate"].max()
-    for _, row in metadata_df.iterrows():
-        path = os.path.join(output_path, row["file_path"].parent.name, row["file_path"].name)
-        if row["sampling_rate"] < max_sr:
-            y, sr = librosa.load(row["file_path"], sr=row["sampling_rate"])
-            y_resampled = librosa.resample(y, orig_sr=sr, target_sr=max_sr)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            sf.write(path, y_resampled, max_sr)
-        else:
-            y, sr = librosa.load(row["file_path"], sr=None)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            sf.write(path, y, sr)
 
+    for idx, row in metadata_df.iterrows():
+        file_path = row["file_path"]
+        current_sr = row["sampling_rate"]
+
+        if current_sr < max_sr:
+            full_path = file_path
+            if not os.path.exists(full_path):
+                print(f"[WARN] File not found: {full_path}")
+                continue
+
+            # Load and resample
+            y, sr = librosa.load(full_path, sr=current_sr)
+            y_resampled = librosa.resample(y, orig_sr=sr, target_sr=max_sr)
+
+            # Overwrite the file
+            sf.write(full_path, y_resampled, max_sr)
+
+            # Optional: update the metadata
+            metadata_df.at[idx, "sampling_rate"] = max_sr
+
+            print(f"[OK] Upsampled: {file_path} → {max_sr}Hz")
 
 def remove_underrepresented_categories(metadata_df, percent=0.5):
     """
@@ -210,16 +182,14 @@ def extract_cepstral_coefficients(metadata_df):
         coefficients.append(mfccs.mean(axis=1))
     return pd.DataFrame(coefficients, columns=[f"mfcc_{i + 1}" for i in range(13)])
 
-
 def split_and_organize_files(
-    input_dir,
     output_dir,
+    metadata_df,
     test_size=0.2,
     val_size=0.1,
     n_splits=5,
     random_state=42,
     stratify_col="category",
-    oversample=False,
 ):
     """
     Split files into train, test, validation, and k-fold folders, and move/copy
@@ -237,8 +207,6 @@ def split_and_organize_files(
                                                 in the train sets of stratified splits.
     """
     # Split into train+val and test
-    metadata_df = remove_underrepresented_categories(create_metadata(input_dir))
-
     trainval_df, test_df = train_test_split(
         metadata_df,
         test_size=test_size,
@@ -282,11 +250,110 @@ def split_and_organize_files(
         fold_train_df = trainval_df.iloc[train_idx]
         fold_path_train = os.path.join(f"kfold_{fold + 1}", "train")
         copy_files(fold_train_df, fold_path_train)
-        if oversample:
-            _oversample(os.path.join(output_dir, fold_path_train))
+
         # Validation fold
         fold_val_df = trainval_df.iloc[val_idx]
         fold_path_val = os.path.join(f"kfold_{fold + 1}", "val")
         copy_files(fold_val_df, fold_path_val)
-    if oversample:
-        _oversample(os.path.join(output_dir, "train"))
+   
+
+
+def augmentation(path, target_duration=5.0, sample_rate=44100, overlap=0.3,
+                 noise_level=0.005, extra_noise_level=0.02):
+
+    window_size = int(target_duration * sample_rate)
+    hop_length = int(window_size * (1 - overlap))
+    max_padding_allowed = int(3 * sample_rate)
+
+    categories = [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))]
+    category_counts = {}
+
+    for cat in categories:
+        cat_dir = os.path.join(path, cat)
+        wav_files = [f for f in os.listdir(cat_dir) if f.endswith(".wav")]
+        category_counts[cat] = len(wav_files)
+
+    max_count = max(category_counts.values())
+
+    for cat in categories:
+        print(f"Processando '{cat}'...")
+        cat_dir = os.path.join(path, cat)
+        wav_files = [f for f in os.listdir(cat_dir) if f.endswith(".wav")]
+
+        if cat.lower() == "hungry":
+            for f in wav_files:
+                file_path = os.path.join(cat_dir, f)
+                y, sr = librosa.load(file_path, sr=sample_rate)
+
+                if len(y) < window_size:
+                    y = np.pad(y, (0, window_size - len(y)))
+                elif len(y) > window_size:
+                    start = (len(y) - window_size) // 2
+                    y = y[start:start + window_size]
+
+                y_noisy = y + np.random.normal(0, noise_level, size=y.shape)
+
+                sf.write(file_path, y_noisy, sample_rate)
+
+            print(f"Total: {len(wav_files)} samples")
+            continue
+
+        new_samples = []
+        for f in wav_files:
+            file_path = os.path.join(cat_dir, f)
+            y, sr = librosa.load(file_path, sr=sample_rate)
+
+            for start in range(0, len(y), hop_length):
+                end = start + window_size
+                window = y[start:end]
+
+                if len(window) < window_size:
+                    padding_len = window_size - len(window)
+                    window = np.pad(window, (0, padding_len))
+                else:
+                    padding_len = 0
+
+                if padding_len >= max_padding_allowed:
+                    continue
+
+                noisy_window = window + np.random.normal(0, noise_level, size=window.shape)
+                new_samples.append(noisy_window)
+
+            os.remove(file_path)
+
+        current_count = len(new_samples)
+        i = 0
+        while len(new_samples) < max_count:
+            original = new_samples[i % current_count]
+            duplicate = original + np.random.normal(0, extra_noise_level, size=original.shape)
+            new_samples.append(duplicate)
+            i += 1
+
+        for idx, sample in enumerate(new_samples):
+            new_name = f"{cat}_sample_{idx+1}.wav"
+            new_path = os.path.join(cat_dir, new_name)
+            sf.write(new_path, sample, sample_rate)
+
+        print(f"Total: {len(new_samples)} samples")
+
+    print("Augmentation completed.")
+
+
+def apply_augmentation(splits_path):
+    for split_dir in os.listdir(splits_path):
+        split_path = os.path.join(splits_path, split_dir)
+        if not os.path.isdir(split_path):
+            continue
+
+        # Caso comum (train, test, val)
+        if split_dir in ["train", "test", "val"]:
+            print(f"🔹 Rodando augmentation para: {split_dir}")
+            augmentation(split_path)
+
+        # Caso especial: kfold
+        elif split_dir.lower().startswith("kfold"):
+            for sub_dir in os.listdir(split_path):
+                sub_path = os.path.join(split_path, sub_dir)
+                if os.path.isdir(sub_path):
+                    print(f"🔹 Rodando augmentation para: {split_dir}/{sub_dir}")
+                    augmentation(sub_path)
